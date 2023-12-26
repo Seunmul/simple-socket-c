@@ -319,10 +319,7 @@ void *sender_thread(void *arg)
         pthread_mutex_lock(&g_client_num_mut);
         for (int i = 0; i < g_total_client_num; i++)
         {
-            // if (g_client_info_arr[i]->sockfd != data.client_sockfd)
-            // {
             send(g_client_info_arr[i]->sockfd, send_data, strlen(send_data), 0);
-            // }
         }
         pthread_mutex_unlock(&g_client_num_mut);
     }

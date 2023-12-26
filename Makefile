@@ -1,10 +1,6 @@
 # Makefile
 .SUFFIXES : .c .o
 
-## VARIABLES ##
-DATE = date +%Y.%m.%d_%H:%M:%S
-
-## DIR ##
 
 ## FLAGS ##
 CC := gcc
@@ -15,7 +11,7 @@ LIBS := -lm -lpthread
 SRCS := server.c client.c
 OBJS := $(SRCS:%.c=%.o) 
 
-TARGET := server client server_cli
+TARGET := server client
  
 RM = rm -rf
 
@@ -37,7 +33,3 @@ clean:
 new : 
 	$(MAKE) clean 
 	$(MAKE) $(TARGET)
-
-
-# dep :
-# 	gccmakedep $(INCS) $(SRCS)
