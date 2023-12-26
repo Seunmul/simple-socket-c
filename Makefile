@@ -15,7 +15,7 @@ LIBS := -lm -lpthread
 SRCS := server.c client.c
 OBJS := $(SRCS:%.c=%.o) 
 
-TARGET := server client
+TARGET := server client server_cli
  
 RM = rm -rf
 
@@ -24,6 +24,10 @@ all:
 	$(MAKE) $(TARGET)
 
 server: server.c
+	$(info $<)
+	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
+
+server_cli: server_cli.c
 	$(info $<)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 

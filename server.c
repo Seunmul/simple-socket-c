@@ -54,16 +54,21 @@ typedef struct
 /* FUNCTIONS */
 void enqueue(const Data *item);
 void dequeue(Data *item);
-void *th_receiver(void *client_sockfd);
-void *th_sender(void *arg);
-static inline void mutex_init();
-static inline void mutex_destroy();
+void *receiver_thread(void *arg);
+void *sender_thread(void *arg);
+void *cli_thread(void *arg);
+static inline void init_mutex();
+static inline void destroy_mutex();
 
 /* GLOBAL VARIABLES */
+int g_cli_choice = 1;
 int g_total_client_num; // scounts client connections
 time_t g_current_time;
-pthread_mutex_t g_client_num_mut, g_sender_mutex;
-pthread_cond_t g_sender_cond;
+pthread_mutex_t g_client_num_mut,
+    g_sender_mutex,
+    g_cli_sync_mutex[2]; // 0 : cli choice variable, 1 : Thread Sync
+pthread_cond_t g_sender_cond,
+    g_cli_sync_cond;
 Queue g_sharedQueue = {.front = -1, .rear = -1, .mutex = PTHREAD_MUTEX_INITIALIZER};
 ClientInfo *g_client_info_arr[MAX_CHATTER_LIM];
 
@@ -75,9 +80,9 @@ int main(int argc, char *argv[])
     struct sockaddr_in server_address;                /* structure to hold server's address */
     struct sockaddr_in client_address;                /* structure to hold client's address */
     uint16_t port;                                    /* protocol port number */
-    pthread_t tid, th_sender_id;                      /* variable to hold thread ID */
+    pthread_t tid, sender_tid, cli_tid;               /* variable to hold thread ID */
 
-    mutex_init();
+    init_mutex();
 
     port = ((argc > 1) ? atoi(argv[1]) : SERVER_PORT);
     if (port <= 0)
@@ -93,11 +98,11 @@ int main(int argc, char *argv[])
     memset(&client_address, 0, client_address_len);
 
     /* setup socket settings */
-    server_sockfd = socket(AF_INET, SOCK_STREAM, 0); // server_sockfd = socket(PF_INET, SOCK_STREAM, ptrp->p_proto);
-    server_address.sin_family = AF_INET;             // set family to Internet
-    // server_address.sin_addr.s_addr = htonl(INADDR_ANY); // set the local IP address : INADDR_ANY is all local interfaces
-    inet_pton(AF_INET, SERVER_IP, &(server_address.sin_addr)); // set the IP address : SERVER_IP is Defined by MACRO
-    server_address.sin_port = htons(port);                     // change port number memory from pc's endian
+    server_sockfd = socket(AF_INET, SOCK_STREAM, 0);    // server_sockfd = socket(PF_INET, SOCK_STREAM, ptrp->p_proto);
+    server_address.sin_family = AF_INET;                // set family to Internet
+    server_address.sin_addr.s_addr = htonl(INADDR_ANY); // set the local IP address : INADDR_ANY is all local interfaces
+    // inet_pton(AF_INET, SERVER_IP, &(server_address.sin_addr)); // set the IP address : SERVER_IP is Defined by MACRO
+    server_address.sin_port = htons(port); // change port number memory from pc's endian
 
     if (server_sockfd < 0)
     {
@@ -122,13 +127,13 @@ int main(int argc, char *argv[])
             - Server Port : %d\n\n",
             SERVER_IP, SERVER_PORT);
 
-    // if (pthread_create(&cli_thread_id, NULL, cli_thread, NULL) < 0)
-    // {
-    //     perror("[SERVER] ERROR Occured while load CLI.");
-    //     exit(EXIT_FAILURE);
-    // }
+    if (pthread_create(&cli_tid, NULL, cli_thread, (void *)&server_sockfd) < 0)
+    {
+        perror("[SERVER] ERROR Occured while load CLI.");
+        exit(EXIT_FAILURE);
+    }
 
-    if (pthread_create(&th_sender_id, NULL, th_sender, NULL) < 0)
+    if (pthread_create(&sender_tid, NULL, sender_thread, NULL) < 0)
     {
         perror("[SERVER] ERROR Occured while load sender Thread.");
         exit(EXIT_FAILURE);
@@ -136,6 +141,11 @@ int main(int argc, char *argv[])
 
     while (1)
     {
+        // pthread_mutex_lock(&g_cli_sync_mutex[0]);
+        // cli_choice = g_cli_choice;
+        // pthread_mutex_unlock(&g_cli_sync_mutex[0]);
+
+        fprintf(stdout, "[SERVER] Listening... (New Clients can Join)\n");
         fprintf(stdout, "[SERVER] Waiting for connection ...\n");
         if ((client_sockfd = accept(server_sockfd, (struct sockaddr *)&client_address, &client_address_len)) < 0)
         {
@@ -147,35 +157,141 @@ int main(int argc, char *argv[])
         fprintf(stdout, "[SERVER] New client is connected, Thread ID : %ld\n", pthread_self());
 
         // tid가 쓰레드 생성때마다 계속 바뀌긴한다.
-        if (pthread_create(&tid, NULL, th_receiver, (void *)&client_sockfd) < 0) // 여기서 tid값은 thread내에서 pthread_self()반환값
+        if (pthread_create(&tid, NULL, receiver_thread, (void *)&client_sockfd) < 0) // 여기서 tid값은 thread내에서 pthread_self()반환값
         {
-            fprintf(stdout, "[SERVER] th_receiver creatation Failed:%ld\n", tid);
+            fprintf(stdout, "[SERVER] receiver_thread creatation Failed:%ld\n", tid);
             fprintf(stdout, "[SERVER] Close Client Connection %d\n", client_sockfd);
             close(client_sockfd);
             exit(EXIT_FAILURE);
         }
     }
-    mutex_destroy();
+    destroy_mutex();
     close(server_sockfd);
     exit(EXIT_SUCCESS);
 }
 
 /* Other Functions */
 
-static inline void mutex_init()
+static inline void init_mutex()
 {
     pthread_mutex_init(&g_client_num_mut, NULL);
     pthread_mutex_init(&g_sender_mutex, NULL);
     pthread_mutex_init(&g_sharedQueue.mutex, NULL);
+    for (int i = 0; i < 3; i++)
+    {
+        pthread_mutex_init(&g_cli_sync_mutex[i], NULL);
+    }
+    pthread_cond_init(&g_cli_sync_cond, NULL);
     pthread_cond_init(&g_sender_cond, NULL);
+    return;
 }
 
-static inline void mutex_destroy()
+static inline void destroy_mutex()
 {
     pthread_mutex_destroy(&g_client_num_mut);
     pthread_mutex_destroy(&g_sender_mutex);
     pthread_mutex_destroy(&g_sharedQueue.mutex);
+    for (int i = 0; i < 3; i++)
+    {
+        pthread_mutex_destroy(&g_cli_sync_mutex[i]);
+    }
+    pthread_cond_destroy(&g_cli_sync_cond);
     pthread_cond_destroy(&g_sender_cond);
+    return;
+}
+
+static inline void show_cli_list()
+{
+    fprintf(stdout, "\n========================================\n");
+    fprintf(stdout, "[SERVER CLI] 0. CLI Help\n");
+    fprintf(stdout, "[SERVER CLI] 1. Open New Clients Threads(Default)\n");
+    fprintf(stdout, "[SERVER CLI] 2. Exit\n");
+    fprintf(stdout, "========================================\n\n");
+    fprintf(stdout, "[SERVER CLI] Enter your cli_choice: \n\n");
+    return;
+}
+
+void *cli_thread(void *arg)
+{
+    int cli_choice = 0;
+    int __server_sockfd__ = *((int *)arg);
+    show_cli_list();
+    while (1)
+    {
+        int continue_flag = 0;
+        scanf("%d", &cli_choice);
+
+        if (g_cli_choice == cli_choice)
+        {
+            fprintf(stdout, "\n========================================\n");
+            fprintf(stdout, "[SERVER_CLI] You selected same option. Please try other Option.\n");
+            fprintf(stdout, "========================================\n\n");
+            continue;
+        }
+
+        switch (cli_choice)
+        {
+        case 0:
+            fprintf(stdout, "\n========================================\n");
+            fprintf(stdout, "[SERVER_CLI] You selected Help Option.\n");
+            fprintf(stdout, "========================================\n\n");
+            show_cli_list();
+            continue_flag = 1;
+            break;
+        // case 1:
+        //     fprintf(stdout, "\n========================================\n");
+        //     fprintf(stdout, "[SERVER_CLI] Option 1 : Socket Server Opened.\n");
+        //     fprintf(stdout, "[SERVER_CLI] Now Socket Server Will Spawn Client Threads.\n");
+        //     fprintf(stdout, "========================================\n\n");
+        //     break;
+        // case 2:
+        //     fprintf(stdout, "\n========================================\n");
+        //     fprintf(stdout, "[SERVER_CLI] Option 2 : Socket Server Closed.\n");
+        //     fprintf(stdout, "[SERVER_CLI] Now Socket Server will not spawn another Client.\n");
+        //     fprintf(stdout, "========================================\n\n");
+        //     break;
+        // case 3:
+        //     fprintf(stdout, "\n========================================\n");
+        //     fprintf(stdout, "[SERVER_CLI] Option 3.\n");
+        //     fprintf(stdout, "========================================\n\n");
+        //     break;
+        case 2:
+            fprintf(stdout, "\n========================================\n");
+            fprintf(stdout, "[SERVER_CLI] You selected Exit Option.\n");
+            fprintf(stdout, "========================================\n\n");
+            break;
+        default:
+            fprintf(stdout, "\n========================================\n");
+            fprintf(stdout, "[SERVER_CLI] You selected Invalid Option. Please try other Option\n");
+            fprintf(stdout, "========================================\n\n");
+            show_cli_list();
+            continue_flag = 1;
+            break;
+        }
+
+        if (continue_flag == 1)
+        {
+            continue;
+        }
+
+        pthread_mutex_lock(&g_cli_sync_mutex[0]);
+        g_cli_choice = cli_choice;
+        pthread_mutex_unlock(&g_cli_sync_mutex[0]);
+
+        if (g_cli_choice == 1 || g_cli_choice == 4)
+        {
+            pthread_mutex_lock(&g_cli_sync_mutex[1]);
+            pthread_cond_signal(&g_cli_sync_cond);
+            pthread_mutex_unlock(&g_cli_sync_mutex[1]);
+        }
+
+        if (g_cli_choice == 2)
+            break;
+    }
+    fprintf(stdout, "[SERVER] Exiting CLI.\n");
+    close(__server_sockfd__);
+    exit(EXIT_SUCCESS);
+    pthread_exit(NULL);
 }
 
 void enqueue(const Data *item) // 데이터를 큐에 삽입하는 함수
@@ -232,7 +348,7 @@ void dequeue(Data *item) // 데이터를 큐에서 추출하는 함수
     pthread_mutex_unlock(&g_sharedQueue.mutex);
 }
 
-void *th_receiver(void *arg)
+void *receiver_thread(void *arg)
 {
 
     char recvbuf[1024];
@@ -321,7 +437,8 @@ void *th_receiver(void *arg)
     fprintf(stdout, "[SERVER] Total clients : %d\n", g_total_client_num);
     pthread_exit(NULL);
 }
-void *th_sender(void *arg)
+
+void *sender_thread(void *arg)
 {
     while (1)
     {
