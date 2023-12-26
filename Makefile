@@ -27,10 +27,6 @@ server: server.c
 	$(info $<)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
 
-server_cli: server_cli.c
-	$(info $<)
-	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
-
 client: client.c
 	$(info $<)
 	$(CC) $(CFLAGS) $< -o $@ $(LIBS)
